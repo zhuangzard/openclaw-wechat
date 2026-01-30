@@ -3,13 +3,15 @@
  * 连接微信 iPad 协议服务和 OpenClaw Gateway
  */
 
-import { loadConfig, saveConfig, getAuthKey, saveAuthKey, getAllowedUsers, addAllowedUser, isUserAllowed, getPairingCode } from './config.mjs';
+import { loadConfig, saveConfig, getAuthKey, saveAuthKey, getAllowedUsers, addAllowedUser, isUserAllowed, getPairingCode, getPaths } from './config.mjs';
 import * as logger from './logger.mjs';
-import { delay } from './utils.mjs';
+import { delay, parseImageXml } from './utils.mjs';
 import { randomBytes } from 'node:crypto';
 import { GatewayConnection } from './gateway.mjs';
 import { WechatService } from './wechat.mjs';
 import qrcode from 'qrcode-terminal';
+import fs from 'node:fs';
+import path from 'node:path';
 
 // 版本信息
 const VERSION = '1.0.0';
@@ -280,14 +282,51 @@ class Bridge {
     }
 
     try {
+      let messageToSend = message.content;
+      let attachments = [];
+
+      // 处理图片消息
+      if (message.type === 'image' && message.msgId) {
+        logger.info('检测到图片消息，尝试下载...');
+        
+        const imageInfo = parseImageXml(message.content);
+        if (imageInfo && imageInfo.length > 0) {
+          const imagePath = await this.downloadAndSaveImage({
+            msgId: message.msgId,
+            totalLen: imageInfo.hdlength || imageInfo.length,
+            fromUser: message.from,
+            toUser: message.to,
+          });
+
+          if (imagePath) {
+            // 图片下载成功，添加到附件
+            attachments.push({
+              type: 'image',
+              path: imagePath,
+            });
+            messageToSend = '[用户发送了一张图片]';
+            logger.success(`图片已保存: ${imagePath}`);
+          } else {
+            messageToSend = '[用户发送了一张图片，但下载失败]';
+            logger.warn('图片下载失败');
+          }
+        }
+      }
+
       // 发送到 Gateway (使用 agent 方法)
-      // 使用 main agent，sessionKey 格式包含 agent id
-      const response = await this.gateway.callAgent({
-        message: message.content,
+      const agentParams = {
+        message: messageToSend,
         agentId: 'main',
         sessionKey: `agent:main:wechat:${message.from}`,
         deliver: false,
-      });
+      };
+
+      // 如果有图片附件，添加到请求
+      if (attachments.length > 0) {
+        agentParams.attachments = attachments;
+      }
+
+      const response = await this.gateway.callAgent(agentParams);
 
       // 发送 AI 回复
       if (response && response.text) {
@@ -309,6 +348,33 @@ class Bridge {
       } catch (e) {
         logger.error('发送错误提示失败', e.message);
       }
+    }
+  }
+
+  /**
+   * 下载并保存图片
+   */
+  async downloadAndSaveImage(params) {
+    try {
+      const imageBuffer = await this.wechat.downloadImage(params);
+      if (!imageBuffer) return null;
+
+      // 保存到 ~/.openclaw/media/wechat/
+      const paths = getPaths();
+      const mediaDir = path.join(paths.configDir, 'media', 'wechat');
+      
+      if (!fs.existsSync(mediaDir)) {
+        fs.mkdirSync(mediaDir, { recursive: true });
+      }
+
+      const filename = `${Date.now()}_${params.msgId}.jpg`;
+      const filePath = path.join(mediaDir, filename);
+
+      fs.writeFileSync(filePath, imageBuffer);
+      return filePath;
+    } catch (error) {
+      logger.error('保存图片失败', error.message);
+      return null;
     }
   }
 

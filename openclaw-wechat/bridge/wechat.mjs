@@ -329,6 +329,72 @@ class WechatService {
   }
 
   /**
+   * 下载图片
+   * @param {object} params - 下载参数
+   * @param {number} params.msgId - 消息 ID
+   * @param {number} params.totalLen - 图片总大小
+   * @param {string} params.fromUser - 发送者
+   * @param {string} params.toUser - 接收者
+   * @returns {Promise<Buffer|null>} 图片数据
+   */
+  async downloadImage(params) {
+    const { msgId, totalLen, fromUser, toUser } = params;
+    
+    if (!msgId || !totalLen) {
+      logger.warn('下载图片缺少必要参数');
+      return null;
+    }
+
+    try {
+      logger.info(`开始下载图片 msgId=${msgId} size=${totalLen}`);
+      
+      const chunks = [];
+      let startPos = 0;
+      const chunkSize = 65536; // 64KB 分片
+
+      while (startPos < totalLen) {
+        const response = await this.http.post('/message/GetMsgBigImg', {
+          MsgId: msgId,
+          TotalLen: totalLen,
+          Section: { StartPos: startPos },
+          ToUserName: toUser,
+          FromUserName: fromUser,
+          CompressType: 0,
+        }, {
+          params: this.getUrlParams(),
+        });
+
+        if (response.data.Code !== 200) {
+          logger.error('下载图片分片失败', response.data.Text);
+          return null;
+        }
+
+        const data = response.data.Data;
+        if (data && data.Data && data.Data.iLen > 0) {
+          // 数据是 base64 编码
+          const chunkData = Buffer.from(data.Data.buffer || '', 'base64');
+          chunks.push(chunkData);
+          startPos = data.StartPos + data.DataLen;
+          logger.debug(`下载进度: ${startPos}/${totalLen}`);
+        } else {
+          break;
+        }
+      }
+
+      if (chunks.length > 0) {
+        const imageBuffer = Buffer.concat(chunks);
+        logger.success(`图片下载完成 size=${imageBuffer.length}`);
+        return imageBuffer;
+      }
+
+      return null;
+    } catch (error) {
+      logger.error('下载图片失败', error.message);
+      return null;
+    }
+  }
+
+  /**
    * 连接 WebSocket 接收消息
    */
   connectWebSocket() {

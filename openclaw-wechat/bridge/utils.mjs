@@ -85,6 +85,7 @@ function parseMessageContent(msg) {
   const result = {
     type: 'text',
     content: '',
+    imageInfo: null,
   };
 
   if (typeof msg === 'string') {
@@ -103,6 +104,8 @@ function parseMessageContent(msg) {
         break;
       case 3:
         result.type = 'image';
+        // 解析图片 XML
+        result.imageInfo = parseImageXml(msg.content);
         break;
       case 34:
         result.type = 'voice';
@@ -119,6 +122,38 @@ function parseMessageContent(msg) {
   }
 
   return result;
+}
+
+/**
+ * 解析图片消息 XML
+ */
+function parseImageXml(xmlContent) {
+  if (!xmlContent || typeof xmlContent !== 'string') return null;
+
+  try {
+    // 提取 img 标签属性
+    const imgMatch = xmlContent.match(/<img([^>]+)>/);
+    if (!imgMatch) return null;
+
+    const attrs = imgMatch[1];
+    const getAttr = (name) => {
+      const match = attrs.match(new RegExp(`${name}="([^"]+)"`));
+      return match ? match[1] : null;
+    };
+
+    return {
+      aeskey: getAttr('aeskey'),
+      cdnthumburl: getAttr('cdnthumburl'),
+      cdnthumblength: parseInt(getAttr('cdnthumblength') || '0', 10),
+      cdnmidimgurl: getAttr('cdnmidimgurl'),
+      cdnbigimgurl: getAttr('cdnbigimgurl'),
+      length: parseInt(getAttr('length') || '0', 10),
+      hdlength: parseInt(getAttr('hdlength') || '0', 10),
+      md5: getAttr('md5'),
+    };
+  } catch (e) {
+    return null;
+  }
 }
 
 /**
@@ -271,6 +306,7 @@ export {
   cleanWxId,
   isChatRoom,
   parseMessageContent,
+  parseImageXml,
   formatDuration,
   formatTimestamp,
   isValidJSON,
