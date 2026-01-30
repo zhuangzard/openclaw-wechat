@@ -291,17 +291,45 @@ class WechatService {
    */
   async sendImageMessage(toUser, imagePath) {
     try {
-      const response = await this.http.post('/message/SendImageMessage', {
-        ToUserName: toUser,
-        ImagePath: imagePath,
+      // 读取图片文件并转为 base64
+      const fs = await import('fs');
+      if (!fs.existsSync(imagePath)) {
+        logger.error('图片文件不存在', imagePath);
+        return false;
+      }
+
+      const imageBuffer = fs.readFileSync(imagePath);
+      const imageBase64 = imageBuffer.toString('base64');
+
+      logger.info(`发送图片 to=${toUser} size=${imageBuffer.length} bytes`);
+
+      const response = await this.http.post('/message/SendImageNewMessage', {
+        MsgItem: [
+          {
+            ToUserName: toUser,
+            MsgType: 2,
+            ImageContent: imageBase64,
+          },
+        ],
       }, {
         params: this.getUrlParams(),
       });
 
       if (response.data.Code === 200) {
-        return response.data.Data?.isSendSuccess || false;
+        const results = response.data.Data || [];
+        // SendImageNewMessage 返回 resp.baseResponse.ret === 0 表示成功
+        const result = results[0];
+        if (result?.resp?.baseResponse?.ret === 0) {
+          return true;
+        }
+        if (result?.isSendSuccess) {
+          return true;
+        }
+        logger.warn('发送图片返回', JSON.stringify(result));
+        return false;
       }
 
+      logger.error('发送图片响应', response.data);
       return false;
     } catch (error) {
       logger.error('发送图片消息失败', error.message);

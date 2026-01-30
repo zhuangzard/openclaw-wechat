@@ -332,7 +332,37 @@ class Bridge {
       if (response && response.text) {
         const replyText = response.text.trim();
         logger.info(`AI 回复: ${replyText.substring(0, 50)}...`);
-        await this.wechat.sendTextMessage(message.from, replyText);
+        
+        // 检测回复中是否包含图片路径
+        const imagePaths = this.extractImagePaths(replyText);
+        
+        if (imagePaths.length > 0) {
+          // 先发送文字部分（去掉图片路径）
+          let textOnly = replyText;
+          for (const imgPath of imagePaths) {
+            textOnly = textOnly.replace(imgPath, '[图片]');
+          }
+          textOnly = textOnly.replace(/`[图片]`/g, '[图片]').trim();
+          
+          if (textOnly && textOnly !== '[图片]') {
+            await this.wechat.sendTextMessage(message.from, textOnly);
+          }
+          
+          // 发送图片
+          for (const imgPath of imagePaths) {
+            logger.info(`发送图片: ${imgPath}`);
+            const success = await this.wechat.sendImageMessage(message.from, imgPath);
+            if (success) {
+              logger.success(`图片发送成功: ${imgPath}`);
+            } else {
+              logger.warn(`图片发送失败: ${imgPath}`);
+              await this.wechat.sendTextMessage(message.from, `图片发送失败，路径: ${imgPath}`);
+            }
+          }
+        } else {
+          // 没有图片，直接发送文字
+          await this.wechat.sendTextMessage(message.from, replyText);
+        }
       }
 
     } catch (error) {
@@ -349,6 +379,43 @@ class Bridge {
         logger.error('发送错误提示失败', e.message);
       }
     }
+  }
+
+  /**
+   * 从文本中提取图片路径
+   */
+  extractImagePaths(text) {
+    const paths = [];
+    
+    // 匹配常见的图片路径格式
+    // 1. /Users/.../xxx.jpg 或 /Users/.../xxx.png
+    // 2. ~/xxx.jpg
+    // 3. `路径` 格式
+    const patterns = [
+      /\/Users\/[^\s`'"\n]+\.(?:jpg|jpeg|png|gif|webp)/gi,
+      /\/tmp\/[^\s`'"\n]+\.(?:jpg|jpeg|png|gif|webp)/gi,
+      /~\/[^\s`'"\n]+\.(?:jpg|jpeg|png|gif|webp)/gi,
+    ];
+    
+    for (const pattern of patterns) {
+      const matches = text.match(pattern);
+      if (matches) {
+        for (const match of matches) {
+          // 清理路径（去掉可能的 markdown 代码块标记）
+          let cleanPath = match.replace(/`/g, '').trim();
+          // 展开 ~
+          if (cleanPath.startsWith('~/')) {
+            cleanPath = cleanPath.replace('~', process.env.HOME || '/Users/laolin');
+          }
+          // 检查文件是否存在
+          if (fs.existsSync(cleanPath)) {
+            paths.push(cleanPath);
+          }
+        }
+      }
+    }
+    
+    return [...new Set(paths)]; // 去重
   }
 
   /**
